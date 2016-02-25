@@ -1,0 +1,17 @@
+# Bash completion for ssh hostnames using a text file as input.
+
+_cloud_hostnames()
+{
+    COMPREPLY=()
+    local cur="${COMP_WORDS[COMP_CWORD]}"
+
+    local cloud_hostname_file=/tmp/cloud_hostnames
+    if [[ -f $cloud_hostname_file ]]; then
+        local cloud_hostnames=( $(<$cloud_hostname_file) )
+        COMPREPLY=( $(compgen -W "${cloud_hostnames[*]}" -- "$cur") )
+        return 0
+    fi
+}
+
+complete -F _cloud_hostnames myssh
+alias myssh='ssh'
