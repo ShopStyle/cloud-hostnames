@@ -1,9 +1,6 @@
-cloud-hostnames.py is a script for maintaining route53 CNAMES to EC2 instances.
-It's intended to run when your systems boot, since that's when EC2 IPs can
-change.
-
-The script behaves differently if the instance is in a VPC or not.  As
-commented in the code...
+cloud-hostnames.py is a script for dynamically updating CNAME records each
+time a EC2 instance starts.  The script behaves differently if the instance is
+in a VPC or not.  As commented in the code...
 
     If a host has a public and private address, we register <nostname>-public
     and <hostname> as independent and unique records. Most of the time if a
@@ -25,7 +22,5 @@ tab completion of hostnames (see the --list option and the
 bash_completion.example file in this repo) and integration with monitoring
 systems.
 
-MENTION SALT REACTOR...
-
-This script was originally written by Charles McLaughlin for PopSugar and was
-largly influenced by his work at Nextdoor.com.
+This script was written by Charles McLaughlin at PopSugar and was influenced
+by his work at Nextdoor.com.
