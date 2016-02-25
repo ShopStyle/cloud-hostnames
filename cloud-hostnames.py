@@ -79,7 +79,7 @@ def run_cli53(ec2_hostname, public=False):
     host_no_dashes = host.replace('-', '')
 
     cmd = ("/usr/local/bin/cli53 rrcreate --replace {domain} "
-           "'{host} 600 CNAME {ec2_hostname}.'")
+           "'{host} 60 CNAME {ec2_hostname}.'")
     cmds = (cmd.format(domain=domain, host=host,
                        ec2_hostname=ec2_hostname),
             cmd.format(domain=domain, host=host_no_dashes,
