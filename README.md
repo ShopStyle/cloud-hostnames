@@ -27,6 +27,5 @@ systems.
 
 MENTION SALT REACTOR...
 
-This script was originally written by Charles McLaughlin
-<cmclaughlin@popsugar.com> for PopSugar and was largly influenced by his work
-at Nextdoor.com.
+This script was originally written by Charles McLaughlin for PopSugar and was
+largly influenced by his work at Nextdoor.com.
