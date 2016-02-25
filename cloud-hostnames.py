@@ -47,7 +47,7 @@ def get_hostnames():
     """
     mac = metadata('network/interfaces/macs/').strip('/')
     # 404s if not in a VPC
-    vpc_id = metadata('network/interfaces/macs/{mac}/vpc-id'.format(mac=mac)
+    vpc_id = metadata('network/interfaces/macs/{mac}/vpc-id'.format(mac=mac))
     # 404s if no public IP
     public_hostname = metadata('public-hostname')
     # Should always work
