@@ -57,6 +57,18 @@ def get_hostnames():
     return (vpc_id, public_hostname, private_hostname)
 
 
+def split_hostname(hostname):
+    """ Splits a hostname such as my.example.com into my and example.com.
+
+    Keyword arguments:
+    hostname -- A string of the hostname you want to split.
+    """
+    # Assuming we won't use deeper sub-domains...
+    host, domain, tld = hostname.split('.')
+    domain = '%s.%s' % (domain, tld)
+    return (host, domain)
+
+
 def run_cli53(ec2_hostname, public=False):
     """ Runs cli53 to create a CNAME for the local host pointing to
     EC2's managed DNS record.  Also creates a second CNAME with dashes removed
@@ -67,10 +79,7 @@ def run_cli53(ec2_hostname, public=False):
     ec2_hostname -- The instance's hostname provided by EC2.
     public -- Used to indicate a public hostname. If so, pass in True.
     """
-    hostname = gethostname()
-    # Assuming we won't use deeper sub-domains...
-    host, domain, tld = hostname.split('.')
-    domain = '%s.%s' % (domain, tld)
+    host, domain = split_hostname(gethostname)
 
     if public:
         host = host + '-public'
@@ -136,12 +145,23 @@ def add_dynamo_hostnames(records):
 def delete_dynamo_hostname(hostname):
     """ Deletes the given hostname from DynamoDB.
 
+    Also deletes any "host-public.domain.tld" records, but in order to look
+    for those records we search for records that begin with "host" and make
+    sure they end with "domain.tld", so in theory if you've added records
+    that don't follow our normal pattterns the delete could be greedy.
+
     Keyword arguments:
-    hostname -- The hostname string to delete
+    hostname -- The hostname string to delete.  Expects the primary ID,
+    not the -public or a stripped string.
     """
-    host = Hostnames.get(hostname)
-    host.delete()
-    syslog('Deleted %s from DynamoDB' % hostname)
+    host, domain = split_hostname(hostname)
+
+    for record in Hostnames.scan(hostname__begins_with=host):
+        # Don't see a way to do a full text scan with pattern matching...
+        # So we verify this is the record we want to delete for each record
+        if record.hostname.endswith(domain):
+            record.delete()
+            syslog('Deleted %s from DynamoDB' % hostname)
 
 
 def list_dynamo_hostnames():
