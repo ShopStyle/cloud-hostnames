@@ -6,23 +6,16 @@
 # and DYNAMODB_TABLE
 
 import argparse
+import boto
 import json
 import os
+import urllib2
+
+from boto.dynamodb.condition import BEGINS_WITH
 from socket import gethostname
 from subprocess import call
 from syslog import syslog
-import urllib2
-
-from pynamodb.models import Model
-from pynamodb.attributes import UnicodeAttribute
-
-
-class Hostnames(Model):
-    """ This class models the DynamoDB table schema. """
-    class Meta:
-        table_name = os.environ['DYNAMODB_TABLE']
-        region = os.environ['AWS_DEFAULT_REGION']
-    hostname = UnicodeAttribute(hash_key=True)
+from time import time
 
 
 def metadata(uri):
@@ -42,7 +35,7 @@ def metadata(uri):
             raise
 
 
-def get_hostnames():
+def get_ec2_hostnames():
     """ Gets the local instance's hostnames from the metadata API.
     Returns a tuple of:
         (vpc_id, public_hostname, private_hostname)
@@ -84,7 +77,7 @@ def run_commands(commands):
         call(command, shell=True)
 
 
-def rrcreate(ec2_hostname, public=False):
+def rrcreate(ec2_hostname, public=False, dry=False):
     """ Runs cli53 to create a CNAME for the local host pointing to
     EC2's managed DNS record.  Also creates a second CNAME with dashes removed
     that's easier to type on mobile devices.
@@ -94,6 +87,7 @@ def rrcreate(ec2_hostname, public=False):
     Keyword arguments:
     ec2_hostname -- The instance's hostname provided by EC2.
     public -- Used to indicate a public hostname. If so, pass in True.
+    dry -- Dry run, don't actually create any records.
     """
     host, domain = split_hostname(gethostname())
 
@@ -104,15 +98,16 @@ def rrcreate(ec2_hostname, public=False):
     host_no_dashes = host.replace('-', '')
 
     cmd = "cli53 rrcreate --replace {domain} '{host} 60 CNAME {ec2_hostname}.'"
-    run_commands([cmd.format(domain=domain, host=host,
-                            ec2_hostname=ec2_hostname),
-                 cmd.format(domain=domain, host=host_no_dashes,
-                            ec2_hostname=ec2_hostname)])
+    if not dry:
+        run_commands([cmd.format(domain=domain, host=host,
+                                 ec2_hostname=ec2_hostname),
+                      cmd.format(domain=domain, host=host_no_dashes,
+                                 ec2_hostname=ec2_hostname)])
 
     return '%s.%s' % (host, domain)
 
 
-def register(hostnames):
+def add_records(hostnames, dry=False):
     """
     If a host has a public and private address, we register <nostname>-public
     and <hostname> as independent and unique records. Most of the time if a
@@ -130,36 +125,47 @@ def register(hostnames):
 
     Keyword arguments:
     hostnames -- A tuple of (vpc_id, public_hostname, private_hostname)
+    dry -- Perform a dry-run, don't add any records (passed to rrcreate)
     """
     vpc_id, public_hostname, private_hostname = hostnames
     records = []
 
     if vpc_id:
         if public_hostname:
-            records.append(rrcreate(private_hostname))
-            records.append(rrcreate(public_hostname, public=True))
+            records.append(rrcreate(private_hostname, public=False, dry=dry))
+            records.append(rrcreate(public_hostname, public=True, dry=dry))
         else:
-            records.append(rrcreate(private_hostname))
+            records.append(rrcreate(private_hostname, public=False, dry=dry))
     else:
-        records.append(rrcreate(public_hostname, public=True))
+        records.append(rrcreate(public_hostname, public=True, dry=dry))
 
     return records
 
 
+def get_dynamo_table():
+    """ Sets up a connnection to DynamoDB and returns a pointer to the hostnames
+    table. """
+    conn = boto.connect_dynamodb()
+    return conn.get_table(os.environ['DYNAMODB_TABLE'])
+
+
 def add_dynamo_hostnames(records):
-    """ Inserts the provided values into DynamoDB """
+    """ Inserts/updates the provided values in DynamoDB """
+    table = get_dynamo_table()
+
     for hostname in records:
-        row = Hostnames(hostname)
-        row.save()
-    syslog('Added %s to DynamoDB' % records)
+        data = {'timestamp': time()}
+        item = table.new_item(hash_key=hostname, attrs = data)
+        item.put()
+
+    syslog('Added/updated %s in DynamoDB' % records)
 
 
 def list_dynamo_hostnames():
     """ Lists the hostnames from DynamoDB. """
-    dump = json.loads(Hostnames.dumps())
-    dump.sort()
-    for host in dump:
-        print host[0]
+    table = get_dynamo_table()
+    for row in table.scan():
+        print row['hostname']
 
 
 def delete(hostname):
@@ -181,12 +187,14 @@ def delete(hostname):
     cmd = 'cli53 rrdelete {domain} {host} CNAME'
     commands = []
 
-    for row in Hostnames.scan(hostname__begins_with=host):
-        # Don't see a way to do a full text scan with pattern matching...
-        # So we search the hostname and verify this is the record we want to
-        # delete by matching the domain
-        if row.hostname.endswith(domain):
-            host_to_delete = row.hostname.replace('.%s' % domain, '')
+    table = get_dynamo_table()
+
+    for row in table.scan(scan_filter={'hostname': BEGINS_WITH(host)}):
+        # Scan the entire table and searching the hostname.  Verify this is the
+        # record we want to delete by matching the domain.  This makes up for
+        # lack of searching on the hash key.
+        if row['hostname'].endswith(domain):
+            host_to_delete = row['hostname'].replace('.%s' % domain, '')
             host_to_delete_no_dashes = host_to_delete.replace('-', '')
             commands.append(cmd.format(domain=domain,
                                        host=host_to_delete))
@@ -198,19 +206,49 @@ def delete(hostname):
     run_commands(commands)
 
 
+def purge(threshold):
+    """ Deletes old records from DynamoDB and Route53.
+    This is a very inefficient opperation intended to be run infrequently.  We
+    end up scanning the entire table twice - once to look for "original"
+    hostnames (wihtout -public) added, then we call the delete() method which
+    also scans to search and destroy.
+
+    Keyword arguments:
+    threshold -- Records older than this number of seconds will be deleted.
+    """
+    table = get_dynamo_table()
+    for row in table.scan():
+        if not '-public' in row['hostname']:
+            if time() - row['timestamp'] < threshold:
+                delete(row['hostname'])
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--list', action='store_true',
-                        help='List the cloud hostnames from dynamodb')
+                        help='List the cloud hostnames from DynamoDB')
     parser.add_argument('--delete',
-                        help='Delete the given hostname from dynamodb')
+                        help='Delete the given hostname from DynamoDB')
+
+    parser.add_argument('--purge',
+                        help=('Delete records that have not been updated in '
+                              'the provided number of seconds'))
+    parser.add_argument('--update', action='store_true',
+                        help=('Log this host as active in DynamoDB by updating '
+                              'the last_updated field'))
     args = parser.parse_args()
 
     if args.list:
         list_dynamo_hostnames()
     elif args.delete:
         delete(args.delete)
+    elif args.purge:
+        purge(args.purge)
+    elif args.update:
+        ec2_hostnames = get_ec2_hostnames()
+        records = add_records(ec2_hostnames, dry=True)
+        add_dynamo_hostnames(records)
     else:
-        hostnames = get_hostnames()
-        records = register(hostnames)
+        ec2_hostnames = get_ec2_hostnames()
+        records = add_records(ec2_hostnames)
         add_dynamo_hostnames(records)
