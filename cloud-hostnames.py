@@ -2,7 +2,8 @@
 
 # This script creates DNS entries for cloud instances and stories copies
 # in DynamoDB for quick and easy access.  The following environment variables
-# are expected: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY and DYNAMODB_TABLE
+# are expected: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
+# and DYNAMODB_TABLE
 
 import argparse
 import json
@@ -20,7 +21,7 @@ class Hostnames(Model):
     """ This class models the DynamoDB table schema. """
     class Meta:
         table_name = os.environ['DYNAMODB_TABLE']
-        region = 'us-east-1'
+        region = os.environ['AWS_DEFAULT_REGION']
     hostname = UnicodeAttribute(hash_key=True)
 
 
