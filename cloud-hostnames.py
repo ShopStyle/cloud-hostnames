@@ -164,9 +164,7 @@ def add_dynamo_hostnames(records):
 def list_dynamo_hostnames():
     """ Lists the hostnames from DynamoDB. """
     table = get_dynamo_table()
-    scan = table.scan()
-
-    for row in scan:
+    for row in table.scan():
         print row['hostname']
 
 
@@ -208,12 +206,33 @@ def delete(hostname):
     run_commands(commands)
 
 
+def purge(threshold):
+    """ Deletes old records from DynamoDB and Route53.
+    This is a very inefficient opperation intended to be run infrequently.  We
+    end up scanning the entire table twice - once to look for "original"
+    hostnames (wihtout -public) added, then we call the delete() method which
+    also scans to search and destroy.
+
+    Keyword arguments:
+    threshold -- Records older than this number of seconds will be deleted.
+    """
+    table = get_dynamo_table()
+    for row in table.scan():
+        if not '-public' in row['hostname']:
+            if time() - row['timestamp'] < threshold:
+                delete(row['hostname'])
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--list', action='store_true',
                         help='List the cloud hostnames from DynamoDB')
     parser.add_argument('--delete',
                         help='Delete the given hostname from DynamoDB')
+
+    parser.add_argument('--purge',
+                        help=('Delete records that have not been updated in '
+                              'the provided number of seconds'))
     parser.add_argument('--update', action='store_true',
                         help=('Log this host as active in DynamoDB by updating '
                               'the last_updated field'))
@@ -223,6 +242,8 @@ if __name__ == '__main__':
         list_dynamo_hostnames()
     elif args.delete:
         delete(args.delete)
+    elif args.purge:
+        purge(args.purge)
     elif args.update:
         ec2_hostnames = get_ec2_hostnames()
         records = add_records(ec2_hostnames, dry=True)
