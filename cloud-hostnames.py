@@ -104,10 +104,10 @@ def rrcreate(ec2_hostname, public=False):
     host_no_dashes = host.replace('-', '')
 
     cmd = "cli53 rrcreate --replace {domain} '{host} 60 CNAME {ec2_hostname}.'"
-    run_commands(cmd.format(domain=domain, host=host,
+    run_commands([cmd.format(domain=domain, host=host,
                             ec2_hostname=ec2_hostname),
                  cmd.format(domain=domain, host=host_no_dashes,
-                            ec2_hostname=ec2_hostname))
+                            ec2_hostname=ec2_hostname)])
 
     return '%s.%s' % (host, domain)
 
