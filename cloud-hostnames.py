@@ -80,7 +80,7 @@ def run_cli53(ec2_hostname, public=False):
     ec2_hostname -- The instance's hostname provided by EC2.
     public -- Used to indicate a public hostname. If so, pass in True.
     """
-    host, domain = split_hostname(gethostname)
+    host, domain = split_hostname(gethostname())
 
     if public:
         host = host + '-public'
