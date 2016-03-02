@@ -2,10 +2,11 @@
 
 # This script creates DNS entries for cloud instances and stories copies
 # in DynamoDB for quick and easy access. The following environment variables
-# are expected: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION
-# and DYNAMODB_TABLE
+# are expected: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION,
+# DYNAMODB_TABLE and SERVICE_CNAME_FILE
 
 import argparse
+import ast
 import boto
 import json
 import os
@@ -18,12 +19,17 @@ from syslog import syslog
 from time import time
 
 
+R53_CREATE_CMD = ("cli53 rrcreate --replace {domain} '{host} 60 CNAME "
+                  "{ec2_hostname}.'")
+R53_DELETE_CMD = 'cli53 rrdelete {domain} {host} CNAME'
+
+
 class CloudHostname(object):
     """ If a host has a public and private address, we register
-    <nostname>-public and <hostname> as independent and unique DNS records. Most
-    of the time if a host has a public and private address, we will want to use
-    the private address as it's internal and more secure. Therefore, we default
-    to the private address as the primary record.
+    <nostname>-public and <hostname> as independent and unique DNS records.
+    Most of the time if a host has a public and private address, we will want
+    to use the private address as it's internal and more secure. Therefore, we
+    default to the private address as the primary record.
 
     If there is no public IP, then we only register a private record for
     <hostname>.
@@ -38,7 +44,15 @@ class CloudHostname(object):
 
     def __init__(self, vpc_id, public_ec2_hostname, private_ec2_hostname,
                  dry=False):
-        """ Constructor/initializer for the CloudHostname class. """
+        """ Constructor/initializer for the CloudHostname class.
+
+        Keyword arguments:
+        vpc_id -- The instance's vpc_id, pass in False if we're not in a VPC.
+        public_ec2_hostname -- The instance's public DNS record.
+        private_ec2_hostname -- The instnace's private DNS record.
+        dry -- If True we don't create route53 records, but we do log them to
+               DynamoDB.
+        """
         rrcreate = self.__rrcreate
 
         if vpc_id:
@@ -62,7 +76,6 @@ class CloudHostname(object):
             item.put()
         syslog('Added/updated %s in DynamoDB' % self.records)
 
-
     def __rrcreate(self, ec2_hostname, public=False, dry=False):
         """ Runs cli53 to create a CNAME for the local host pointing to
         EC2's managed DNS record. Also creates a second CNAME with dashes
@@ -83,14 +96,12 @@ class CloudHostname(object):
         # Add a second record with no dashes that's easier to type on mobiles
         host_no_dashes = host.replace('-', '')
 
-        cmd = ("cli53 rrcreate --replace {domain} '{host} 60 CNAME "
-               "{ec2_hostname}.'")
-
         if not dry:
             CloudHostname.__run_commands([
-              cmd.format(domain=domain, host=host, ec2_hostname=ec2_hostname),
-              cmd.format(domain=domain, host=host_no_dashes,
-                         ec2_hostname=ec2_hostname)])
+                R53_CREATE_CMD.format(domain=domain, host=host,
+                                      ec2_hostname=ec2_hostname),
+                R53_CREATE_CMD.format(domain=domain, host=host_no_dashes,
+                                      ec2_hostname=ec2_hostname)])
 
         self.records.append('%s.%s' % (host, domain))
 
@@ -142,7 +153,6 @@ class CloudHostname(object):
         not the -public or a stripped string.
         """
         host, domain = CloudHostname.__split_hostname(hostname)
-        cmd = 'cli53 rrdelete {domain} {host} CNAME'
         commands = []
 
         table = CloudHostname.__get_dynamo_table()
@@ -154,10 +164,10 @@ class CloudHostname(object):
             if row['hostname'].endswith(domain):
                 host_to_delete = row['hostname'].replace('.%s' % domain, '')
                 host_to_delete_no_dashes = host_to_delete.replace('-', '')
-                commands.append(cmd.format(domain=domain,
-                                           host=host_to_delete))
-                commands.append(cmd.format(domain=domain,
-                                           host=host_to_delete_no_dashes))
+                commands.append(R53_DELETE_CMD.format(
+                    domain=domain, host=host_to_delete))
+                commands.append(R53_DELETE_CMD.format(
+                    domain=domain, host=host_to_delete_no_dashes))
                 row.delete()
                 syslog('Deleted %s from DynamoDB' % hostname)
 
@@ -169,6 +179,49 @@ class CloudHostname(object):
         table = CloudHostname.__get_dynamo_table()
         for row in table.scan():
             print row['hostname']
+
+    @staticmethod
+    def service_cname(public_ec2_hostname, private_ec2_hostname):
+        """ Creates the service CNAME record that may be associated with
+        this instance.
+
+        Using configuration management, such as Salt or Puppet, you can
+        write a service CNAME to the SERVICE_CNAME_FILE using this format:
+        <record> <public - True or False>
+
+        Here's an example:
+        saltmaster.mydomain.com False
+
+        This will result in creation of a saltmaster.mydomain.com CNAME
+        record that points to the EC2 instance's private managed DNS entry.
+        If the second field was True, the CNAME would point to the instance's
+        public managed DNS entry.
+
+        Please note these service CNAME records are not stored in DynamoDB
+        and are not purged from route53 using the purge() method.
+        They're not intended to be as dynamic as the instance CNAME records
+        which change often as you boot new cloud instances. Therefore,
+        deleting old service CNAME records is a manual process.
+
+        Keyword arguments:
+        public_ec2_hostname -- The instance's public DNS record.
+        private_ec2_hostname -- The instnace's private DNS record.
+        """
+        cname_file = os.environ['SERVICE_CNAME_FILE']
+        if os.path.isfile(cname_file):
+            with open(cname_file, 'r') as f:
+                cname, public = f.read().split(' ')
+
+            host, domain = CloudHostname.__split_hostname(cname)
+
+            if ast.literal_eval(public):  # converts str to bool
+                ec2_hostname = public_ec2_hostname
+            else:
+                ec2_hostname = private_ec2_hostname
+
+            CloudHostname.__run_commands([
+                R53_CREATE_CMD.format(
+                    domain=domain, host=host, ec2_hostname=ec2_hostname)])
 
     @staticmethod
     def purge(threshold):
@@ -199,8 +252,8 @@ class MetaData(object):
     """ Models the EC2 host metadata as returned by the local API """
 
     def __init__(self):
-        """ Gets the local instance's hostnames from the local EC2 metadata API.
-        Sets the following instance variables:
+        """ Gets the local instance's hostnames from the local EC2 metadata
+        API. Sets the following instance variables:
 
             vpc_id, public_ec2_hostname, private_ec2_hostname
 
@@ -258,7 +311,11 @@ if __name__ == '__main__':
         metadata = MetaData()
         CloudHostname.update(metadata.vpc_id, metadata.public_ec2_hostname,
                              metadata.private_ec2_hostname)
+        CloudHostname.service_cname(metadata.public_ec2_hostname,
+                                    metadata.private_ec2_hostname)
     else:
         metadata = MetaData()
         CloudHostname(metadata.vpc_id, metadata.public_ec2_hostname,
                       metadata.private_ec2_hostname)
+        CloudHostname.service_cname(metadata.public_ec2_hostname,
+                                    metadata.private_ec2_hostname)
