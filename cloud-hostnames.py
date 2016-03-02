@@ -14,7 +14,7 @@ import urllib2
 
 from boto.dynamodb.condition import BEGINS_WITH
 from socket import gethostname
-from subprocess import call
+from subprocess import check_call
 from syslog import syslog
 from time import time
 
@@ -134,7 +134,7 @@ class CloudHostname(object):
         """
         for command in commands:
             syslog('Running command %s' % command)
-            call(command, shell=True)
+            check_call(command, shell=True)
 
     @staticmethod
     def delete(hostname):
