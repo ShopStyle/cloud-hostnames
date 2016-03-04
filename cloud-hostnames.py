@@ -57,12 +57,12 @@ class CloudHostname(object):
 
         if vpc_id:
             if public_ec2_hostname:
-                rrcreate(private_ec2_hostname, public=False, dry=dry)
-                rrcreate(public_ec2_hostname, public=True, dry=dry)
+                rrcreate(private_ec2_hostname, public_in_vpc=False, dry=dry)
+                rrcreate(public_ec2_hostname, public_in_vpc=True, dry=dry)
             else:
-                rrcreate(private_ec2_hostname, public=False, dry=dry)
+                rrcreate(private_ec2_hostname, public_in_vpc=False, dry=dry)
         else:
-            rrcreate(public_ec2_hostname, public=True, dry=dry)
+            rrcreate(public_ec2_hostname, public_in_vpc=False, dry=dry)
 
         self.__add_dynamo_hostnames()
 
@@ -76,7 +76,7 @@ class CloudHostname(object):
             item.put()
         syslog('Added/updated %s in DynamoDB' % self.records)
 
-    def __rrcreate(self, ec2_hostname, public=False, dry=False):
+    def __rrcreate(self, ec2_hostname, public_in_vpc=False, dry=False):
         """ Runs cli53 to create a CNAME for the local host pointing to
         EC2's managed DNS record. Also creates a second CNAME with dashes
         removed that's easier to type on mobile devices.
@@ -85,23 +85,26 @@ class CloudHostname(object):
 
         Keyword arguments:
         ec2_hostname -- The instance's hostname provided by EC2.
-        public -- Used to indicate a public hostname. If so, pass in True.
+        public_in_vpc -- Used to indicate a public hostname inside a VPC. If
+                         so, pass in True.
         dry -- Dry run, don't actually create any records.
         """
         host, domain = CloudHostname.__split_hostname(gethostname())
 
-        if public:
+        if public_in_vpc:
             host = host + '-public'
 
+        cmds = [R53_CREATE_CMD.format(
+            domain=domain, host=host, ec2_hostname=ec2_hostname)]
+
         # Add a second record with no dashes that's easier to type on mobiles
-        host_no_dashes = host.replace('-', '')
+        if '-' in host:
+            cmds.append(R53_CREATE_CMD.format(
+                domain=domain, host=host.replace('-', ''),
+                ec2_hostname=ec2_hostname))
 
         if not dry:
-            CloudHostname.__run_commands([
-                R53_CREATE_CMD.format(domain=domain, host=host,
-                                      ec2_hostname=ec2_hostname),
-                R53_CREATE_CMD.format(domain=domain, host=host_no_dashes,
-                                      ec2_hostname=ec2_hostname)])
+            CloudHostname.__run_commands(cmds)
 
         self.records.append('%s.%s' % (host, domain))
 
