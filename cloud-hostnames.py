@@ -166,11 +166,12 @@ class CloudHostname(object):
             # up for lack of searching on the hash key.
             if row['hostname'].endswith(domain):
                 host_to_delete = row['hostname'].replace('.%s' % domain, '')
-                host_to_delete_no_dashes = host_to_delete.replace('-', '')
                 commands.append(R53_DELETE_CMD.format(
                     domain=domain, host=host_to_delete))
-                commands.append(R53_DELETE_CMD.format(
-                    domain=domain, host=host_to_delete_no_dashes))
+                if '-' in host_to_delete:
+                    commands.append(R53_DELETE_CMD.format(
+                        domain=domain,
+                        host=host_to_delete.replace('-', '')))
                 row.delete()
                 syslog('Deleted %s from DynamoDB' % hostname)
 
@@ -242,7 +243,7 @@ class CloudHostname(object):
         for row in table.scan():
             if '-public' not in row['hostname']:
                 if time() - row['timestamp'] > threshold:
-                    delete(row['hostname'])
+                    CloudHostname.delete(row['hostname'])
 
     @staticmethod
     def update(vpc_id, public_ec2_hostname, private_ec2_hostname):
@@ -309,7 +310,7 @@ if __name__ == '__main__':
     elif args.delete:
         CloudHostname.delete(args.delete)
     elif args.purge:
-        CloudHostname.purge(args.purge)
+        CloudHostname.purge(int(args.purge))
     elif args.update:
         metadata = MetaData()
         CloudHostname.update(metadata.vpc_id, metadata.public_ec2_hostname,
