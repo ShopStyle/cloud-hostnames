@@ -186,12 +186,13 @@ class CloudHostname(object):
 
     @staticmethod
     def service_cname(public_ec2_hostname, private_ec2_hostname):
-        """ Creates the service CNAME record that may be associated with
+        """ Creates the service CNAME records that may be associated with
         this instance.
 
         Using configuration management, such as Salt or Puppet, you can
         write a service CNAME to the SERVICE_CNAME_FILE using this format:
-        <record> <public - True or False>
+        <record1> <public - True or False>
+        <record2> <public - True or False>
 
         Here's an example:
         saltmaster.mydomain.com False
@@ -214,18 +215,21 @@ class CloudHostname(object):
         cname_file = os.environ['SERVICE_CNAME_FILE']
         if os.path.isfile(cname_file):
             with open(cname_file, 'r') as f:
-                cname, public = f.read().split(' ')
+                lines = f.readlines()
 
-            host, domain = CloudHostname.__split_hostname(cname)
+            for line in lines:
+                cname, public = line.split(' ')
 
-            if ast.literal_eval(public):  # converts str to bool
-                ec2_hostname = public_ec2_hostname
-            else:
-                ec2_hostname = private_ec2_hostname
+                host, domain = CloudHostname.__split_hostname(cname)
 
-            CloudHostname.__run_commands([
-                R53_CREATE_CMD.format(
-                    domain=domain, host=host, ec2_hostname=ec2_hostname)])
+                if ast.literal_eval(public):  # converts str to bool
+                    ec2_hostname = public_ec2_hostname
+                else:
+                    ec2_hostname = private_ec2_hostname
+
+                CloudHostname.__run_commands([
+                    R53_CREATE_CMD.format(
+                        domain=domain, host=host, ec2_hostname=ec2_hostname)])
 
     @staticmethod
     def purge(threshold):
