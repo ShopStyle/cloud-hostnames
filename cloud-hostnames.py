@@ -13,7 +13,7 @@ import os
 import urllib2
 
 from boto.dynamodb.condition import BEGINS_WITH
-from socket import gethostname
+from socket import getfqdn
 from subprocess import check_call
 from syslog import syslog
 from time import time
@@ -89,7 +89,7 @@ class CloudHostname(object):
                          so, pass in True.
         dry -- Dry run, don't actually create any records.
         """
-        host, domain = CloudHostname.__split_hostname(gethostname())
+        host, domain = CloudHostname.__split_hostname(getfqdn())
 
         if public_in_vpc:
             host = host + '-public'
