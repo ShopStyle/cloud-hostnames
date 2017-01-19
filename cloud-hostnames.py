@@ -1,27 +1,31 @@
 #!/usr/bin/env python
 
-# This script creates DNS entries for cloud instances and stories copies
-# in DynamoDB for quick and easy access. The following environment variables
-# are expected: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION,
-# DYNAMODB_TABLE and SERVICE_CNAME_FILE
+"""
+This script creates DNS entries for cloud instances and stories copies
+in DynamoDB for quick and easy access. The following environment variables
+are expected: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION,
+DYNAMODB_TABLE and SERVICE_CNAME_FILE
+"""
 
 import argparse
 import ast
-import boto
-import json
 import os
 import urllib2
 
-from boto.dynamodb.condition import BEGINS_WITH
 from socket import getfqdn
 from subprocess import check_call
 from syslog import syslog
 from time import time
 
+import boto
+
+from boto.dynamodb.condition import BEGINS_WITH
+
 
 R53_CREATE_CMD = ("cli53 rrcreate --replace {domain} '{host} 60 CNAME "
                   "{ec2_hostname}.'")
 R53_DELETE_CMD = 'cli53 rrdelete {domain} {host} CNAME'
+API_URL = 'http://169.254.169.254/latest/meta-data'
 
 
 class CloudHostname(object):
@@ -42,33 +46,32 @@ class CloudHostname(object):
 
     records = []  # tracks records added in a transaction
 
-    def __init__(self, vpc_id, public_ec2_hostname, private_ec2_hostname,
+    def __init__(self, vpc_id, public_hostname, private_hostname,
                  dry=False):
         """ Constructor/initializer for the CloudHostname class.
 
         Keyword arguments:
         vpc_id -- The instance's vpc_id, pass in False if we're not in a VPC.
-        public_ec2_hostname -- The instance's public DNS record.
-        private_ec2_hostname -- The instnace's private DNS record.
+        public_hostname -- The instance's public DNS record.
+        private_hostname -- The instnace's private DNS record.
         dry -- If True we don't create route53 records, but we do log them to
                DynamoDB.
         """
-        rrcreate = self.__rrcreate
 
         if vpc_id:
-            if public_ec2_hostname:
-                rrcreate(private_ec2_hostname, public_in_vpc=False, dry=dry)
-                rrcreate(public_ec2_hostname, public_in_vpc=True, dry=dry)
+            if public_hostname:
+                self._rrcreate(private_hostname, public_in_vpc=False, dry=dry)
+                self._rrcreate(public_hostname, public_in_vpc=True, dry=dry)
             else:
-                rrcreate(private_ec2_hostname, public_in_vpc=False, dry=dry)
+                self._rrcreate(private_hostname, public_in_vpc=False, dry=dry)
         else:
-            rrcreate(public_ec2_hostname, public_in_vpc=False, dry=dry)
+            self._rrcreate(public_hostname, public_in_vpc=False, dry=dry)
 
-        self.__add_dynamo_hostnames()
+        self._add_dynamo_hostnames()
 
-    def __add_dynamo_hostnames(self):
+    def _add_dynamo_hostnames(self):
         """ Inserts/updates the route53 records in DynamoDB """
-        table = self.__get_dynamo_table()
+        table = self._get_dynamo_table()
 
         for hostname in self.records:
             data = {'timestamp': time()}
@@ -76,12 +79,10 @@ class CloudHostname(object):
             item.put()
         syslog('Added/updated %s in DynamoDB' % self.records)
 
-    def __rrcreate(self, ec2_hostname, public_in_vpc=False, dry=False):
+    def _rrcreate(self, ec2_hostname, public_in_vpc=False, dry=False):
         """ Runs cli53 to create a CNAME for the local host pointing to
-        EC2's managed DNS record. Also creates a second CNAME with dashes
-        removed that's easier to type on mobile devices.
-
-        Appends the primary CNAME to the records instance variable.
+        EC2's managed DNS record. Appends the primary CNAME to the records
+        instance variable.
 
         Keyword arguments:
         ec2_hostname -- The instance's hostname provided by EC2.
@@ -89,7 +90,7 @@ class CloudHostname(object):
                          so, pass in True.
         dry -- Dry run, don't actually create any records.
         """
-        host, domain = CloudHostname.__split_hostname(getfqdn())
+        host, domain = CloudHostname._split_hostname(getfqdn())
 
         if public_in_vpc:
             host = host + '-public'
@@ -97,26 +98,20 @@ class CloudHostname(object):
         cmds = [R53_CREATE_CMD.format(
             domain=domain, host=host, ec2_hostname=ec2_hostname)]
 
-        # Add a second record with no dashes that's easier to type on mobiles
-        if '-' in host:
-            cmds.append(R53_CREATE_CMD.format(
-                domain=domain, host=host.replace('-', ''),
-                ec2_hostname=ec2_hostname))
-
         if not dry:
-            CloudHostname.__run_commands(cmds)
+            CloudHostname._run_commands(cmds)
 
         self.records.append('%s.%s' % (host, domain))
 
     @staticmethod
-    def __get_dynamo_table():
+    def _get_dynamo_table():
         """ Sets up a connnection to DynamoDB and returns a pointer to the
         hostnames table. """
         conn = boto.connect_dynamodb()
         return conn.get_table(os.environ['DYNAMODB_TABLE'])
 
     @staticmethod
-    def __split_hostname(hostname):
+    def _split_hostname(hostname):
         """ Splits a hostname such as my.example.com into my and example.com.
         Returns a tuple of the host (i.e. my) and domain (i.e. example.com).
 
@@ -129,7 +124,7 @@ class CloudHostname(object):
         return (host, domain)
 
     @staticmethod
-    def __run_commands(commands):
+    def _run_commands(commands):
         """ Runs the given commands as a subprocess and logs them to syslog.
 
         Keyword arguments:
@@ -155,10 +150,10 @@ class CloudHostname(object):
         hostname -- The hostname string to delete.  Expects the primary ID,
         not the -public or a stripped string.
         """
-        host, domain = CloudHostname.__split_hostname(hostname)
+        host, domain = CloudHostname._split_hostname(hostname)
         commands = []
 
-        table = CloudHostname.__get_dynamo_table()
+        table = CloudHostname._get_dynamo_table()
 
         for row in table.scan(scan_filter={'hostname': BEGINS_WITH(host)}):
             # Scan the entire table and searching the hostname. Verify this is
@@ -175,17 +170,17 @@ class CloudHostname(object):
                 row.delete()
                 syslog('Deleted %s from DynamoDB' % hostname)
 
-        CloudHostname.__run_commands(commands)
+        CloudHostname._run_commands(commands)
 
     @staticmethod
     def list():
         """ Lists the hostnames from DynamoDB. """
-        table = CloudHostname.__get_dynamo_table()
+        table = CloudHostname._get_dynamo_table()
         for row in table.scan():
             print row['hostname']
 
     @staticmethod
-    def service_cname(public_ec2_hostname, private_ec2_hostname):
+    def service_cname(public_hostname, private_hostname):
         """ Creates the service CNAME records that may be associated with
         this instance.
 
@@ -209,25 +204,25 @@ class CloudHostname(object):
         deleting old service CNAME records is a manual process.
 
         Keyword arguments:
-        public_ec2_hostname -- The instance's public DNS record.
-        private_ec2_hostname -- The instnace's private DNS record.
+        public_hostname -- The instance's public DNS record.
+        private_hostname -- The instnace's private DNS record.
         """
-        cname_file = os.environ['SERVICE_CNAME_FILE']
-        if os.path.isfile(cname_file):
-            with open(cname_file, 'r') as f:
-                lines = f.readlines()
+        cname_filename = os.environ['SERVICE_CNAME_FILE']
+        if os.path.isfile(cname_filename):
+            with open(cname_filename, 'r') as cname_file:
+                lines = cname_file.readlines()
 
             for line in lines:
                 cname, public = line.split(' ')
 
-                host, domain = CloudHostname.__split_hostname(cname)
+                host, domain = CloudHostname._split_hostname(cname)
 
                 if ast.literal_eval(public):  # converts str to bool
-                    ec2_hostname = public_ec2_hostname
+                    ec2_hostname = public_hostname
                 else:
-                    ec2_hostname = private_ec2_hostname
+                    ec2_hostname = private_hostname
 
-                CloudHostname.__run_commands([
+                CloudHostname._run_commands([
                     R53_CREATE_CMD.format(
                         domain=domain, host=host, ec2_hostname=ec2_hostname)])
 
@@ -243,17 +238,17 @@ class CloudHostname(object):
         Keyword arguments:
         threshold -- Records older than this number of seconds will be deleted.
         """
-        table = CloudHostname.__get_dynamo_table()
+        table = CloudHostname._get_dynamo_table()
         for row in table.scan():
             if '-public' not in row['hostname']:
                 if time() - row['timestamp'] > threshold:
                     CloudHostname.delete(row['hostname'])
 
     @staticmethod
-    def update(vpc_id, public_ec2_hostname, private_ec2_hostname):
+    def update(vpc_id, public_hostname, private_hostname):
         """ Updates the last_updated timestamp in DynamoDB for the given
         hostname. """
-        CloudHostname(vpc_id, public_ec2_hostname, private_ec2_hostname, True)
+        CloudHostname(vpc_id, public_hostname, private_hostname, True)
 
 
 class MetaData(object):
@@ -263,33 +258,32 @@ class MetaData(object):
         """ Gets the local instance's hostnames from the local EC2 metadata
         API. Sets the following instance variables:
 
-            vpc_id, public_ec2_hostname, private_ec2_hostname
+            vpc_id, public_hostname, private_hostname
 
-        If vpc_id or public_ec2_hostname are not valid, those values will be
+        If vpc_id or public_hostname are not valid, those values will be
         False.
         """
-        mac = self.__api_wrapper('network/interfaces/macs/').strip('/')
+        mac = self._api_wrapper('network/interfaces/macs/').strip('/')
         # 404s if not in a VPC
-        self.vpc_id = self.__api_wrapper(
+        self.vpc_id = self._api_wrapper(
             'network/interfaces/macs/{mac}/vpc-id'.format(mac=mac))
         # 404s if no public IP
-        self.public_ec2_hostname = self.__api_wrapper('public-hostname')
+        self.public_hostname = self._api_wrapper('public-hostname')
         # Should always work
-        self.private_ec2_hostname = self.__api_wrapper(
+        self.private_hostname = self._api_wrapper(
             'network/interfaces/macs/{mac}/local-hostname/'.format(mac=mac))
 
-    def __api_wrapper(self, uri):
+    def _api_wrapper(self, uri):
         """ Fetches data from the EC2 meta-data API.
         Returns data provided by the API or False on 404.
 
         Keyword arguments:
         uri -- the API endpoint to query
         """
-        API = 'http://169.254.169.254/latest/meta-data'
         try:
-            return urllib2.urlopen(url='%s/%s' % (API, uri)).read()
-        except urllib2.HTTPError, e:
-            if e.code == 404:
+            return urllib2.urlopen(url='%s/%s' % (API_URL, uri)).read()
+        except urllib2.HTTPError, error:
+            if error.code == 404:
                 return False
             else:
                 raise
@@ -309,6 +303,8 @@ if __name__ == '__main__':
                               'updating the last_updated field.'))
     args = parser.parse_args()
 
+    metadata = MetaData()
+
     if args.list:
         CloudHostname.list()
     elif args.delete:
@@ -316,14 +312,12 @@ if __name__ == '__main__':
     elif args.purge:
         CloudHostname.purge(int(args.purge))
     elif args.update:
-        metadata = MetaData()
-        CloudHostname.update(metadata.vpc_id, metadata.public_ec2_hostname,
-                             metadata.private_ec2_hostname)
-        CloudHostname.service_cname(metadata.public_ec2_hostname,
-                                    metadata.private_ec2_hostname)
+        CloudHostname.update(metadata.vpc_id, metadata.public_hostname,
+                             metadata.private_hostname)
+        CloudHostname.service_cname(metadata.public_hostname,
+                                    metadata.private_hostname)
     else:
-        metadata = MetaData()
-        CloudHostname(metadata.vpc_id, metadata.public_ec2_hostname,
-                      metadata.private_ec2_hostname)
-        CloudHostname.service_cname(metadata.public_ec2_hostname,
-                                    metadata.private_ec2_hostname)
+        CloudHostname(metadata.vpc_id, metadata.public_hostname,
+                      metadata.private_hostname)
+        CloudHostname.service_cname(metadata.public_hostname,
+                                    metadata.private_hostname)
