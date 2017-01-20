@@ -2,9 +2,18 @@
 
 """
 This script creates DNS entries for cloud instances and stories copies
-in DynamoDB for quick and easy access. The following environment variables
-are expected: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION,
-DYNAMODB_TABLE and SERVICE_CNAME_FILE
+in DynamoDB for quick and easy access.
+
+The following environment variable are expected:
+
+    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION,
+    DYNAMODB_TABLE, SERVICE_CNAME_FILE
+
+The following environment variable are optional, providing the ability
+to register the host's CNAME on a different domain:
+
+    REPLACE_DOMAIN_OLD
+    REPLACE_DOMAIN_NEW
 """
 
 import argparse
@@ -121,6 +130,12 @@ class CloudHostname(object):
         # Assuming we won't use deeper sub-domains...
         host, domain, tld = hostname.split('.')
         domain = '%s.%s' % (domain, tld)
+
+        if 'REPLACE_DOMAIN_OLD' in os.environ and \
+           'REPLACE_DOMAIN_NEW' in os.environ:
+            domain = domain.replace(os.environ['REPLACE_DOMAIN_OLD'],
+                                    os.environ['REPLACE_DOMAIN_NEW'])
+
         return (host, domain)
 
     @staticmethod
