@@ -284,9 +284,12 @@ class MetaData(object):
             'network/interfaces/macs/{mac}/vpc-id'.format(mac=mac))
         # 404s if no public IP
         self.public_hostname = self._api_wrapper('public-hostname')
-        # Should always work
-        self.private_hostname = self._api_wrapper(
+        
+        private_hostname = self._api_wrapper(
             'network/interfaces/macs/{mac}/local-hostname/'.format(mac=mac))
+        if len(private_hostname) > 0:
+            private_hostname = private_hostname.split()[0]
+        self.private_hostname = private_hostname
 
     def _api_wrapper(self, uri):
         """ Fetches data from the EC2 meta-data API.
